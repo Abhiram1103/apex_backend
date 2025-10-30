@@ -1,7 +1,7 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-dotenv==1.0.0
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.10
 transformers==4.46.0
 torch==2.5.1
 requests==2.31.0
