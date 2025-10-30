@@ -9,20 +9,10 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import psycopg2
 from psycopg2.extras import RealDictCursor
-import nltk
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
 import warnings
 import os
 
 warnings.filterwarnings('ignore')
-
-# Download NLTK data on startup
-try:
-    nltk.download('stopwords', quiet=True)
-    nltk.download('punkt_tab', quiet=True)
-except:
-    pass
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -46,10 +36,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is required")
 
-# Global variables for model and cached data
+# Global variable for model only (no more in-memory cache!)
 model = None
-job_data_cache = None
-job_embeddings_cache = None
 
 # Pydantic models for request/response
 class SkillGapRequest(BaseModel):
@@ -94,44 +82,20 @@ def clean_text(text):
     text = str(text)
     text = text.replace('/', ' ')
     text = text.lower()
-    text = re.sub(r'[^a-z0-9\s]', ' ', text)
+    # Keep alphanumeric, spaces, and important tech symbols
+    text = re.sub(r'[^a-z0-9\s+#]', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     
-    try:
-        stop_words = set(stopwords.words('english'))
-        word_tokens = word_tokenize(text)
-        filtered_text = [word for word in word_tokens if word not in stop_words]
-        return ' '.join(filtered_text)
-    except:
-        return text
-
-
-def create_combined_features(row):
-    """Create combined features from job data"""
-    category = str(row.get('Category', ''))
-    required_skills = str(row.get('Required Skills', ''))
-    job_description = str(row.get('Job Description', ''))
-    job_role = str(row.get('Job Role', ''))
-    company = str(row.get('Company', ''))
+    # Simple stopword removal (no NLTK required)
+    stopwords = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+                 'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be', 
+                 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 
+                 'would', 'should', 'could', 'may', 'might', 'must', 'can'}
     
-    combined = f"{category} {required_skills} {required_skills} {required_skills} {job_description} {job_role} {company}"
-    return combined
-
-
-def fetch_jobs_from_db():
-    """Fetch all jobs from the database"""
-    conn = get_db_connection()
-    try:
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        query = 'SELECT * FROM "Job Roles"'
-        cursor.execute(query)
-        jobs = cursor.fetchall()
-        cursor.close()
-        return jobs
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch jobs: {str(e)}")
-    finally:
-        conn.close()
+    words = text.split()
+    filtered_words = [w for w in words if w not in stopwords and len(w) > 1]
+    
+    return ' '.join(filtered_words) if filtered_words else text
 
 
 def fetch_user_skills(user_id: str):
@@ -156,12 +120,66 @@ def fetch_user_skills(user_id: str):
         conn.close()
 
 
-def preprocess_jobs(jobs):
-    """Preprocess jobs data and create embeddings"""
-    df = pd.DataFrame(jobs)
-    df['combined_features'] = df.apply(create_combined_features, axis=1)
-    df['combined_features'] = df['combined_features'].apply(clean_text)
-    return df
+def get_model():
+    """Lazy load model on first use"""
+    global model
+    if model is None:
+        print("🚀 Loading SBERT model...")
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        print("✅ Model loaded successfully!")
+    return model
+
+
+def fetch_job_embeddings_from_db(conn):
+    """Fetch job embeddings from database (memory efficient!)"""
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    
+    # Fetch all jobs with embeddings
+    cur.execute("""
+        SELECT 
+            id,
+            "Category",
+            "Job Role",
+            "Location",
+            "Job Description",
+            "Required Skills",
+            "Min Salary",
+            "Max Salary",
+            "Average salary",
+            "Company",
+            embedding
+        FROM "Job Roles"
+        WHERE embedding IS NOT NULL
+    """)
+    
+    jobs = []
+    embeddings_list = []
+    
+    for row in cur.fetchall():
+        # Convert embedding bytes back to numpy array
+        embedding = np.frombuffer(row['embedding'], dtype=np.float32)
+        embeddings_list.append(embedding)
+        
+        # Store job data
+        jobs.append({
+            'id': str(row['id']),
+            'category': row['Category'],
+            'job_role': row['Job Role'],
+            'location': row['Location'],
+            'job_description': row['Job Description'],
+            'required_skills': row['Required Skills'],
+            'min_salary': row['Min Salary'],
+            'max_salary': row['Max Salary'],
+            'average_salary': row['Average salary'],
+            'company': row['Company']
+        })
+    
+    cur.close()
+    
+    # Convert to numpy array for similarity calculation
+    embeddings_array = np.array(embeddings_list)
+    
+    return jobs, embeddings_array
 
 
 def parse_skills(skills_data):
@@ -176,28 +194,11 @@ def parse_skills(skills_data):
 
 @app.on_event("startup")
 async def startup_event():
-    """Load model and cache job data on startup"""
-    global model, job_data_cache, job_embeddings_cache
-    
-    print("🚀 Starting Skill Gap Analysis API...")
-    print("Loading SBERT model...")
-    model = SentenceTransformer('all-MiniLM-L6-v2')
-    print("✅ Model loaded successfully!")
-    
-    print("Fetching and preprocessing jobs from database...")
-    try:
-        jobs = fetch_jobs_from_db()
-        job_data_cache = preprocess_jobs(jobs)
-        
-        print("Generating embeddings for all jobs...")
-        job_texts = job_data_cache['combined_features'].tolist()
-        job_embeddings_cache = model.encode(job_texts, show_progress_bar=False)
-        
-        print(f"✅ Successfully cached {len(job_data_cache)} jobs with embeddings!")
-    except Exception as e:
-        print(f"⚠️ Warning: Could not cache jobs on startup: {str(e)}")
-        job_data_cache = None
-        job_embeddings_cache = None
+    """Lightweight startup - only log, no caching!"""
+    print("🚀 Skill Gap Analysis API started!")
+    print("✅ Using database-backed embeddings (memory efficient)")
+    print("💾 Memory usage: ~100MB (vs 500MB with cache)")
+    print("📊 Model loads on first request")
 
 
 @app.get("/")
@@ -217,12 +218,27 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Render"""
-    return {
-        "status": "healthy",
-        "model_loaded": model is not None,
-        "jobs_cached": job_data_cache is not None,
-        "total_jobs": len(job_data_cache) if job_data_cache is not None else 0
-    }
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute('SELECT COUNT(*) FROM "Job Roles" WHERE embedding IS NOT NULL')
+        job_count = cur.fetchone()[0]
+        cur.close()
+        
+        return {
+            "status": "healthy",
+            "model_loaded": model is not None,
+            "using_database_embeddings": True,
+            "total_jobs_with_embeddings": job_count,
+            "memory_optimized": True
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+    finally:
+        conn.close()
 
 
 @app.post("/api/skill-gap", response_model=SkillGapResponse)
@@ -254,19 +270,7 @@ async def analyze_skill_gap(request: SkillGapRequest):
         "total_jobs_analyzed": 500
     }
     """
-    global model, job_data_cache, job_embeddings_cache
-    
-    if not request.user_id:
-        raise HTTPException(status_code=400, detail="user_id cannot be empty")
-    
-    if request.top_n < 1 or request.top_n > 100:
-        raise HTTPException(status_code=400, detail="top_n must be between 1 and 100")
-    
-    if model is None or job_data_cache is None or job_embeddings_cache is None:
-        raise HTTPException(
-            status_code=503, 
-            detail="Model or job data not loaded. Please wait"
-        )
+    conn = get_db_connection()
     
     try:
         # Fetch user skills
@@ -280,49 +284,57 @@ async def analyze_skill_gap(request: SkillGapRequest):
         user_skill_text = " ".join(user_skills_list)
         cleaned_user_skills = clean_text(user_skill_text)
         
+        # Get model (lazy load)
+        current_model = get_model()
+        
         # Generate embedding for user skills
-        user_embedding = model.encode([cleaned_user_skills])
+        user_embedding = current_model.encode([cleaned_user_skills])
+        
+        # Fetch job embeddings from database (not from cache!)
+        jobs, job_embeddings = fetch_job_embeddings_from_db(conn)
+        
+        if len(jobs) == 0:
+            raise HTTPException(status_code=404, detail="No jobs with embeddings found")
         
         # Calculate cosine similarity
-        similarities = cosine_similarity(user_embedding, job_embeddings_cache)[0]
+        similarities = cosine_similarity(user_embedding, job_embeddings)[0]
         
-        # Add similarity scores to dataframe
-        df_with_scores = job_data_cache.copy()
-        df_with_scores['similarity_score'] = similarities
+        # Create list with jobs and scores
+        jobs_with_scores = []
+        for i, job in enumerate(jobs):
+            jobs_with_scores.append({
+                **job,
+                'similarity_score': similarities[i]
+            })
         
-        # Min-Max normalize the Average salary column
-        df_with_scores['Average salary'] = pd.to_numeric(df_with_scores['Average salary'], errors='coerce')
-        df_with_scores['Min Salary'] = pd.to_numeric(df_with_scores.get('Min Salary', 0), errors='coerce')
-        df_with_scores['Max Salary'] = pd.to_numeric(df_with_scores.get('Max Salary', 0), errors='coerce')
-        df_with_scores = df_with_scores.dropna(subset=['Average salary'])
+        # Convert to DataFrame for easier manipulation
+        df = pd.DataFrame(jobs_with_scores)
         
-        min_salary = df_with_scores['Average salary'].min()
-        max_salary = df_with_scores['Average salary'].max()
+        # Normalize salaries
+        df['average_salary'] = pd.to_numeric(df['average_salary'], errors='coerce')
+        df['min_salary'] = pd.to_numeric(df['min_salary'], errors='coerce')
+        df['max_salary'] = pd.to_numeric(df['max_salary'], errors='coerce')
+        df = df.dropna(subset=['average_salary'])
+        
+        min_salary = df['average_salary'].min()
+        max_salary = df['average_salary'].max()
         
         if max_salary > min_salary:
-            df_with_scores['normalized_salary'] = (
-                (df_with_scores['Average salary'] - min_salary) / (max_salary - min_salary)
-            )
+            df['normalized_salary'] = (df['average_salary'] - min_salary) / (max_salary - min_salary)
         else:
-            df_with_scores['normalized_salary'] = 0.5
+            df['normalized_salary'] = 0.5
         
         # Calculate combined score (70% similarity, 30% salary)
-        w_similarity = 0.7
-        w_salary = 0.3
-        df_with_scores['combined_score'] = (
-            w_similarity * df_with_scores['similarity_score'] + 
-            w_salary * df_with_scores['normalized_salary']
-        )
+        df['combined_score'] = 0.7 * df['similarity_score'] + 0.3 * df['normalized_salary']
         
         # Sort by combined score and get top N
-        top_jobs = df_with_scores.nlargest(request.top_n, 'combined_score')
+        top_jobs = df.nlargest(request.top_n, 'combined_score')
         
         # Calculate skill gaps
         opportunities = []
         for _, job in top_jobs.iterrows():
             # Parse job required skills
-            job_skills_raw = str(job.get('Required Skills', ''))
-            job_skills_list = parse_skills(job_skills_raw)
+            job_skills_list = parse_skills(job['required_skills'])
             
             # Calculate skill gap
             user_skills_set = set(user_skills_list)
@@ -331,12 +343,12 @@ async def analyze_skill_gap(request: SkillGapRequest):
             matching_skills = list(user_skills_set & job_skills_set)
             
             opportunities.append(SkillGapAnalysis(
-                job_id=str(job.get('id', '')),
-                job_role=str(job.get('Job Role', 'N/A')),
-                company=str(job.get('Company', 'N/A')),
-                avg_salary=float(job['Average salary']),
-                min_salary=float(job.get('Min Salary', 0)),
-                max_salary=float(job.get('Max Salary', 0)),
+                job_id=job['id'],
+                job_role=job['job_role'],
+                company=job['company'],
+                avg_salary=float(job['average_salary']),
+                min_salary=float(job['min_salary']),
+                max_salary=float(job['max_salary']),
                 similarity_score=float(job['similarity_score']),
                 normalized_salary=float(job['normalized_salary']),
                 combined_score=float(job['combined_score']),
@@ -349,13 +361,15 @@ async def analyze_skill_gap(request: SkillGapRequest):
             user_id=request.user_id,
             user_skills=user_skills_list,
             top_opportunities=opportunities,
-            total_jobs_analyzed=len(df_with_scores)
+            total_jobs_analyzed=len(df)
         )
     
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
