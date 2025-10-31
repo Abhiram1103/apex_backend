@@ -56,6 +56,8 @@ class JobRecommendation(BaseModel):
     Category: str
     Location: str
     Required_Skills: str
+    Min_Salary: Optional[float] = None
+    Max_Salary: Optional[float] = None
     similarity_score: float
 
 class RecommendationResponse(BaseModel):
@@ -260,6 +262,8 @@ async def recommend_jobs(user_skills: UserSkills):
                 "Category": "Data Science",
                 "Location": "Bangalore",
                 "Required_Skills": "Python, Machine Learning, SQL",
+                "Min_Salary": 800000,
+                "Max_Salary": 1500000,
                 "similarity_score": 0.85
             },
             ...
@@ -305,6 +309,8 @@ async def recommend_jobs(user_skills: UserSkills):
                 Category=str(jobs[i].get('Category', 'N/A')),
                 Location=str(jobs[i].get('Location', 'N/A')),
                 Required_Skills=str(jobs[i].get('Required Skills', 'N/A')),
+                Min_Salary=float(jobs[i]['Min Salary']) if jobs[i].get('Min Salary') is not None else None,
+                Max_Salary=float(jobs[i]['Max Salary']) if jobs[i].get('Max Salary') is not None else None,
                 similarity_score=float(similarities[i])
             )
             for i in top_indices
