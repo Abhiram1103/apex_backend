@@ -453,7 +453,7 @@ async def chat(request: ChatRequest):
             if recommendations:
                 message += f"\n\n🎯 Found {len(recommendations)} job recommendations for you! "
                 top_job = recommendations[0]
-                message += f"Top match: {top_job.get('Job Role', 'N/A')} with {top_job.get('similarity_score', 0):.1%} compatibility."
+                message += f"Top match: {top_job.get('Job_Role', 'N/A')} with {top_job.get('similarity_score', 0):.1%} compatibility."
             else:
                 message += "\n\n😔 No job matches found yet. Add more skills to get better recommendations!"
         else:

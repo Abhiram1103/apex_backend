@@ -52,6 +52,10 @@ class UserSkills(BaseModel):
 
 class JobRecommendation(BaseModel):
     job_id: str
+    Job_Role: str
+    Category: str
+    Location: str
+    Required_Skills: str
     similarity_score: float
 
 class RecommendationResponse(BaseModel):
@@ -165,15 +169,15 @@ def fetch_job_embeddings_from_db(conn):
         # Store job data
         jobs.append({
             'id': str(row['id']),
-            'category': row['Category'],
-            'job_role': row['Job Role'],
-            'location': row['Location'],
-            'job_description': row['Job Description'],
-            'required_skills': row['Required Skills'],
-            'min_salary': row['Min Salary'],
-            'max_salary': row['Max Salary'],
-            'average_salary': row['Average salary'],
-            'company': row['Company']
+            'Category': row['Category'],
+            'Job Role': row['Job Role'],
+            'Location': row['Location'],
+            'Job Description': row['Job Description'],
+            'Required Skills': row['Required Skills'],
+            'Min Salary': row['Min Salary'],
+            'Max Salary': row['Max Salary'],
+            'Average salary': row['Average salary'],
+            'Company': row['Company']
         })
     
     cur.close()
@@ -250,7 +254,14 @@ async def recommend_jobs(user_skills: UserSkills):
     {
         "success": true,
         "recommendations": [
-            {"job_id": "uuid", "similarity_score": 0.85},
+            {
+                "job_id": "uuid",
+                "Job_Role": "Data Scientist",
+                "Category": "Data Science",
+                "Location": "Bangalore",
+                "Required_Skills": "Python, Machine Learning, SQL",
+                "similarity_score": 0.85
+            },
             ...
         ],
         "total_jobs_analyzed": 500
@@ -289,7 +300,11 @@ async def recommend_jobs(user_skills: UserSkills):
         
         recommendations = [
             JobRecommendation(
-                job_id=jobs[i]['id'],
+                job_id=str(jobs[i]['id']),
+                Job_Role=str(jobs[i].get('Job Role', 'N/A')),
+                Category=str(jobs[i].get('Category', 'N/A')),
+                Location=str(jobs[i].get('Location', 'N/A')),
+                Required_Skills=str(jobs[i].get('Required Skills', 'N/A')),
                 similarity_score=float(similarities[i])
             )
             for i in top_indices
