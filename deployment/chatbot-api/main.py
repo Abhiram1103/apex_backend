@@ -327,7 +327,7 @@ def generate_response(user_id: str, query: str, intent: str, skills: List[str]) 
         job_recs = call_job_recommendation_api(user_id)
         
         if job_recs and len(job_recs) > 0:
-            response_text = f"🎯 I found {len(job_recs)} job recommendations for you based on your skills! "
+            response_text = f"I found {len(job_recs)} job recommendations for you based on your skills! "
             response_text += f"The top match has a {job_recs[0]['similarity_score']:.1%} compatibility score. "
             response_text += "Check the job_recommendations field for details."
         else:
@@ -384,7 +384,7 @@ def generate_response(user_id: str, query: str, intent: str, skills: List[str]) 
         if skills:
             success = update_user_skills(user_id, skills)
             if success:
-                response_text = f"✅ Great! I've added {len(skills)} new skills to your profile: "
+                response_text = f"Great! I've added {len(skills)} new skills to your profile: "
                 response_text += f"{', '.join(skills)}. "
                 response_text += "This will improve your job recommendations!"
             else:

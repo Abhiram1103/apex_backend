@@ -32,7 +32,7 @@ app.add_middleware(
 )
 
 # Database configuration from environment variable
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = "postgresql://postgres.rpzkywwzmcaawjmcqnrq:ApexIsTheBest@aws-1-ap-south-1.pooler.supabase.com:6543/postgres"
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is required")
 
