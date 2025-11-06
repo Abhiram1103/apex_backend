@@ -224,7 +224,7 @@ def extract_skills_from_text(text: str) -> List[str]:
         'csharp': 'C#',
         'golang': 'Go',
         'k8s': 'Kubernetes',
-        'ml': 'Machine Learning',
+        'Machine Learning': 'ml',
         'ai': 'Artificial Intelligence',
         'nlp': 'Natural Language Processing',
         'sklearn': 'Scikit-learn',
